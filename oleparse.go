@@ -489,8 +489,8 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 	check_value := func(name string, expected uint32, value uint32) {
 		debug(fmt.Sprintf("%s: %v", name, expected))
 		if expected != value {
-			fmt.Printf("invalid value for %v expected %04x got %04x",
-				name, expected, value)
+			debug(fmt.Sprintf("invalid value for %v expected %04x got %04x",
+				name, expected, value))
 		}
 	}
 
