@@ -29,7 +29,7 @@ const (
 
 var (
 	MAC_CODEPAGES = map[uint16]string{}
-	BINFILE_NAME  = regexp.MustCompile("(?i)/vbaProject.bin$")
+	BINFILE_NAME  = regexp.MustCompile("(?i)/(vbaProject|oleObject1).bin$")
 )
 
 type OLEHeader struct {
@@ -119,20 +119,43 @@ type VBAModule struct {
 func (self *OLEFile) ReadSector(sector uint32) []byte {
 	start := 512 + self.SectorSize*int(sector)
 
-	return self.data[start : start+self.SectorSize]
+	to_read := self.SectorSize
+	if start > len(self.data) {
+		return nil
+	}
+
+	if start+to_read >= len(self.data) {
+		to_read = len(self.data) - start
+	}
+	return self.data[start : start+to_read]
 }
 
 func (self *OLEFile) ReadMiniSector(sector uint32) []byte {
 	start := self.MiniSectorSize * int(sector)
 
-	return self.ministream[start : start+self.MiniSectorSize]
+	to_read := self.MiniSectorSize
+	if start > len(self.ministream) {
+		return nil
+	}
+
+	if start+to_read >= len(self.ministream) {
+		to_read = len(self.ministream) - start
+	}
+
+	return self.ministream[start : start+to_read]
 }
 
 func (self *OLEFile) ReadFat(sector uint32) uint32 {
+	if int(sector) >= len(self.Fat) {
+		return 0
+	}
 	return self.Fat[sector]
 }
 
 func (self *OLEFile) ReadMiniFat(sector uint32) uint32 {
+	if int(sector) >= len(self.MiniFat) {
+		return 0
+	}
 	return self.MiniFat[sector]
 }
 
@@ -180,7 +203,7 @@ func (self *OLEFile) GetStream(index uint32) []byte {
 		data = self.ReadChain(d.Header.SectStart)
 	}
 
-	return data[:d.Header.Size]
+	return data[:uint32_min(d.Header.Size, uint32(len(data)))]
 }
 
 func (self *OLEFile) FindStreamByName(name string) *Directory {
@@ -214,11 +237,16 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 		return nil, err
 	}
 
+	if self.Header.SectorShift > MAX_SECTOR_SHIFT {
+		return nil, fmt.Errorf("Sector size too large: %v", self.Header.SectorShift)
+	}
+
 	self.SectorSize = 1 << self.Header.SectorShift
 	self.MiniSectorSize = 1 << self.Header.MiniSectorShift
 	if (len(data)-512)%self.SectorSize != 0 {
-		fmt.Printf("Last sector has invalid size\n")
+		DebugPrintf("Last sector has invalid size\n")
 	}
+
 	self.SectorCount = (len(data) - 512) / self.SectorSize
 	for _, sect := range self.Header.SectFat {
 		if sect != FREESECT {
@@ -247,8 +275,9 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 		}
 
 		_, pres := seen[next]
-		if pres {
-			fmt.Printf("infinite loop detected at %v to %v starting at DIF",
+		if pres || len(seen) > MAX_SECTORS {
+			return nil, fmt.Errorf(
+				"infinite loop detected at %v to %v starting at DIF",
 				sector, next)
 		}
 
@@ -274,11 +303,16 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 	dir_buffer := self.ReadChain(self.Header.SectDirStart)
 	for directory_index := 0; directory_index*128 < len(dir_buffer); directory_index += 1 {
 		dir_obj, err := NewDirectory(
-			dir_buffer[directory_index*128:], uint32(directory_index))
+			dir_buffer[min(directory_index*128, len(dir_buffer)):],
+			uint32(directory_index))
 		if err != nil {
 			return nil, err
 		}
 		self.Directory = append(self.Directory, dir_obj)
+	}
+
+	if len(self.Directory) == 0 {
+		return nil, errors.New("Directory not found")
 	}
 
 	// load the ministream
@@ -286,19 +320,21 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 	if root_directory.Header.SectStart != ENDOFCHAIN {
 		self.ministream = self.ReadChain(root_directory.Header.SectStart)
 		if len(self.ministream) < int(root_directory.Header.Size) {
-			fmt.Printf("specified size is larger than actual stream length %v\n",
+			return nil, fmt.Errorf(
+				"specified size is larger than actual stream length %v\n",
 				len(self.ministream))
 		}
 
-		self.ministream = self.ministream[:root_directory.Header.Size]
+		self.ministream = self.ministream[:uint32_min(
+			root_directory.Header.Size, uint32(len(self.ministream)))]
 
 		data := self.ReadChain(self.Header.SectMiniFatStart)
 		for i := 0; i < len(data); i += self.SectorSize {
 			if i+self.SectorSize > len(data) {
-				fmt.Printf("encountered EOF while parsing minifat\n")
+				DebugPrintf("encountered EOF while parsing minifat\n")
 				break
 			}
-			chunk_data := data[i : i+self.SectorSize]
+			chunk_data := data[i:min(i+self.SectorSize, len(data))]
 			chunk := make([]uint32, self.SectorSize/4)
 			buffer := bytes.NewBuffer(chunk_data)
 			err := binary.Read(buffer, binary.LittleEndian, &chunk)
@@ -346,13 +382,13 @@ func DecompressStream(compressed_container []byte) []byte {
 		chunk_is_compressed := (compressed_chunk_header & 0x8000) >> 15
 
 		if chunk_is_compressed != 0 && chunk_size > 4095 {
-			fmt.Printf("CompressedChunkSize > 4095 but CompressedChunkFlag == 1")
+			DebugPrintf("CompressedChunkSize > 4095 but CompressedChunkFlag == 1")
 		}
 		if chunk_is_compressed == 0 && chunk_size != 4095 {
-			fmt.Printf("CompressedChunkSize != 4095 but CompressedChunkFlag == 0")
+			DebugPrintf("CompressedChunkSize != 4095 but CompressedChunkFlag == 0")
 		}
 
-		debug(fmt.Sprintf("chunk size = %v", chunk_size))
+		DebugPrintf("chunk size = %v", chunk_size)
 
 		compressed_end := len(compressed_container)
 		if compressed_end > compressed_current+int(chunk_size) {
@@ -397,10 +433,10 @@ func DecompressStream(compressed_container []byte) []byte {
 				temp2 := 16 - bit_count
 				offset := (temp1 >> temp2) + 1
 				copy_source := len(decompressed_container) - int(offset)
-				debug(fmt.Sprintf("copy_source %v %v", copy_source, length))
+				DebugPrintf("copy_source %v %v", copy_source, length)
 
 				for index := copy_source; index < copy_source+int(length); index++ {
-					debug(fmt.Sprintf("len %v idx %v", len(decompressed_container), index))
+					DebugPrintf("len %v idx %v", len(decompressed_container), index)
 					decompressed_container = append(decompressed_container,
 						decompressed_container[index])
 				}
@@ -487,10 +523,10 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 
 	dir_stream := DecompressStream(ofdoc.GetStream(dir_stream_obj.Index))
 	check_value := func(name string, expected uint32, value uint32) {
-		debug(fmt.Sprintf("%s: %v", name, expected))
+		DebugPrintf("%s: %v", name, expected)
 		if expected != value {
-			debug(fmt.Sprintf("invalid value for %v expected %04x got %04x",
-				name, expected, value))
+			DebugPrintf("invalid value for %v expected %04x got %04x",
+				name, expected, value)
 		}
 	}
 
@@ -505,16 +541,16 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 
 	projectsyskind_syskind := getUint32(dir_stream, &i)
 	if projectsyskind_syskind == 0x00 {
-		debug("16-bit Windows")
+		DebugPrintf("16-bit Windows")
 	} else if projectsyskind_syskind == 0x01 {
-		debug("32-bit Windows")
+		DebugPrintf("32-bit Windows")
 	} else if projectsyskind_syskind == 0x02 {
-		debug("Macintosh")
+		DebugPrintf("Macintosh")
 	} else if projectsyskind_syskind == 0x03 {
-		debug("64-bit Windows")
+		DebugPrintf("64-bit Windows")
 	} else {
-		return nil, errors.New(fmt.Sprintf(
-			"invalid PROJECTSYSKIND_SysKind %04x", projectsyskind_syskind))
+		return nil, fmt.Errorf(
+			"invalid PROJECTSYSKIND_SysKind %04x", projectsyskind_syskind)
 	}
 
 	// PROJECTLCID Record
@@ -651,7 +687,7 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 loop:
 	for {
 		check = getUint16(dir_stream, &i)
-		debug(fmt.Sprintf("reference type = %04x", check))
+		DebugPrintf("reference type = %04x", check)
 		switch check {
 		case 0x000F:
 			break loop
@@ -765,9 +801,7 @@ loop:
 			i += 6
 			continue
 		default:
-			return nil, errors.New(
-				fmt.Sprintf("invalid or unknown check Id %04x", check))
-
+			return nil, fmt.Errorf("invalid or unknown check Id %04x", check)
 		}
 	}
 
@@ -788,7 +822,7 @@ loop:
 
 	// short function to simplify unicode text output
 	//    uni_out = lambda unicode_text: unicode_text.encode("utf-8", "replace")
-	debug(fmt.Sprintf("parsing %v modules", projectmodules_count))
+	DebugPrintf("parsing %v modules", projectmodules_count)
 	for projectmodule_index := 0; projectmodule_index < int(projectmodules_count); projectmodule_index++ {
 		modulestreamname_streamname := ""
 		modulestreamname_streamname_unicode := []byte{}
@@ -903,24 +937,28 @@ loop:
 			debug(fmt.Sprintf("unknown or invalid module section id %04x", section_id))
 		}
 
-		debug(fmt.Sprintf("Project CodePage = %d", projectcodepage_codepage))
-		debug(fmt.Sprintf("ModuleName = %v", modulename_modulename))
-		debug(fmt.Sprintf(
+		DebugPrintf("Project CodePage = %d", projectcodepage_codepage)
+		DebugPrintf("ModuleName = %v", modulename_modulename)
+		DebugPrintf(
 			"ModuleNameUnicode = %v", decodeUnicode(
 				modulename_unicode_modulename_unicode,
-				projectcodepage_codepage)))
-		debug(fmt.Sprintf("StreamName = %v", modulestreamname_streamname))
-		debug(fmt.Sprintf(
+				projectcodepage_codepage))
+		DebugPrintf("StreamName = %v", modulestreamname_streamname)
+		DebugPrintf(
 			"StreamNameUnicode = %v", decodeUnicode(
 				modulestreamname_streamname_unicode,
-				projectcodepage_codepage)))
-		debug(fmt.Sprintf("TextOffset = %v", moduleoffset_textoffset))
+				projectcodepage_codepage))
+		DebugPrintf("TextOffset = %v", moduleoffset_textoffset)
 
 		code_stream := ofdoc.FindStreamByName(modulestreamname_streamname)
+		// This doc has no code stream
+		if code_stream == nil {
+			continue
+		}
 		code_data := ofdoc.GetStream(code_stream.Index)
 
-		debug(fmt.Sprintf("length of code_data = %v", len(code_data)))
-		debug(fmt.Sprintf("offset of code_data = %v", moduleoffset_textoffset))
+		DebugPrintf("length of code_data = %v", len(code_data))
+		DebugPrintf("offset of code_data = %v", moduleoffset_textoffset)
 		code_data = code_data[moduleoffset_textoffset:]
 		if len(code_data) > 0 {
 			result = append(result, &VBAModule{
@@ -1001,7 +1039,7 @@ func ParseBuffer(data []byte) ([]*VBAModule, error) {
 }
 
 func debug(message string) {
-	//	fmt.Println(message)
+	// fmt.Println(message)
 }
 
 func decodeUnicode(data []byte, codepage uint16) string {

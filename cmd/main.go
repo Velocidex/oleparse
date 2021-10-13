@@ -11,20 +11,21 @@ import (
 
 var (
 	app  = kingpin.New("oleparse", "Parse Office files.")
-	file = app.Arg("file", "File to load").Required().String()
+	file = app.Arg("file", "File to load").Required().Strings()
 )
 
 func doParse() error {
-	macros, err := oleparse.ParseFile(*file)
-	if err != nil {
-		return err
+	for _, f := range *file {
+		macros, err := oleparse.ParseFile(f)
+		if err != nil {
+			return fmt.Errorf("While parsing %v: %w", err)
+		}
+
+		serialized, err := json.MarshalIndent(macros, " ", " ")
+		kingpin.FatalIfError(err, "JSON")
+
+		fmt.Println(string(serialized))
 	}
-
-	serialized, err := json.MarshalIndent(macros, " ", " ")
-	kingpin.FatalIfError(err, "JSON")
-
-	fmt.Println(string(serialized))
-
 	return nil
 }
 
