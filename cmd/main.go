@@ -18,7 +18,7 @@ func doParse() error {
 	for _, f := range *file {
 		macros, err := oleparse.ParseFile(f)
 		if err != nil {
-			return fmt.Errorf("While parsing %v: %w", err)
+			return fmt.Errorf("While parsing %v: %w", f, err)
 		}
 
 		serialized, err := json.MarshalIndent(macros, " ", " ")
