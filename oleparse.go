@@ -1006,6 +1006,7 @@ func ParseFile(filename string) ([]*VBAModule, error) {
 	}
 	defer r.Close()
 
+	results := []*VBAModule{}
 	for _, f := range r.File {
 		if BINFILE_NAME.MatchString(f.Name) {
 			rc, err := f.Open()
@@ -1016,11 +1017,14 @@ func ParseFile(filename string) ([]*VBAModule, error) {
 			if err != nil {
 				return nil, err
 			}
-			return ParseBuffer(data)
+			modules, err := ParseBuffer(data)
+			if err == nil {
+				results = append(results, modules...)
+			}
 		}
 	}
 
-	return nil, errors.New("Unknown file type")
+	return results, nil
 }
 
 func ParseBuffer(data []byte) ([]*VBAModule, error) {
