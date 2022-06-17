@@ -29,7 +29,7 @@ const (
 
 var (
 	MAC_CODEPAGES = map[uint16]string{}
-	BINFILE_NAME  = regexp.MustCompile("(?i)/(vbaProject|oleObject1).bin$")
+	BINFILE_NAME  = regexp.MustCompile("(?i).bin$")
 )
 
 type OLEHeader struct {
