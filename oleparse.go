@@ -226,7 +226,8 @@ func (self *OLEFile) OpenStreamByName(name string) ([]byte, error) {
 }
 
 func NewOLEFile(data []byte) (*OLEFile, error) {
-	if len(data) < 8 || string(data[:8]) != OLE_SIGNATURE {
+	if len(data) < 8 ||
+		string(data[:8]) != OLE_SIGNATURE {
 		return nil, errors.New("Invalid signature")
 	}
 
@@ -238,10 +239,16 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 	}
 
 	if self.Header.SectorShift > MAX_SECTOR_SHIFT {
-		return nil, fmt.Errorf("Sector size too large: %v", self.Header.SectorShift)
+		return nil, fmt.Errorf(
+			"Sector size too large: %v", self.Header.SectorShift)
 	}
 
 	self.SectorSize = 1 << self.Header.SectorShift
+	if self.SectorSize < 8 {
+		return nil, fmt.Errorf(
+			"Sector size too small: %v", self.SectorSize)
+	}
+
 	self.MiniSectorSize = 1 << self.Header.MiniSectorShift
 	if (len(data)-512)%self.SectorSize != 0 {
 		DebugPrintf("Last sector has invalid size\n")
@@ -267,6 +274,10 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 		}
 
 		// the last entry is actually a pointer to next DIF
+		if len(dif_values) < 2 {
+			return nil, fmt.Errorf("infinite loop detected")
+		}
+
 		next := dif_values[len(dif_values)-1]
 		for _, value := range dif_values[:len(dif_values)-2] {
 			if value != FREESECT {
@@ -437,6 +448,12 @@ func DecompressStream(compressed_container []byte) []byte {
 
 				for index := copy_source; index < copy_source+int(length); index++ {
 					DebugPrintf("len %v idx %v", len(decompressed_container), index)
+					if index < 0 || index > len(decompressed_container) {
+						DebugPrintf("Decompression out of bound %v (container length %v)",
+							index, len(decompressed_container))
+						return decompressed_container
+					}
+
 					decompressed_container = append(decompressed_container,
 						decompressed_container[index])
 				}
@@ -468,12 +485,20 @@ func copytoken_help(difference int) (int, int, uint32, int) {
 }
 
 func getUint16(dir_stream []byte, offset *int) uint16 {
+	if len(dir_stream) < *offset+2 {
+		return 0
+	}
+
 	result := binary.LittleEndian.Uint16(dir_stream[*offset:])
 	*offset += 2
 	return result
 }
 
 func getUint32(dir_stream []byte, offset *int) uint32 {
+	if len(dir_stream) < *offset+4 {
+		return 0
+	}
+
 	result := binary.LittleEndian.Uint32(dir_stream[*offset:])
 	*offset += 4
 	return result
