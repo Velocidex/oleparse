@@ -578,8 +578,19 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 			"invalid PROJECTSYSKIND_SysKind %04x", projectsyskind_syskind)
 	}
 
+	// Optional: CompatVersionRecord
+	compatversion_id := getUint16(dir_stream, &i)
+	if compatversion_id == 0x4A {
+		compatversion_size := getUint32(dir_stream, &i)
+		check_value("PROJECTCOMPATVERSION_Size", 0x4, compatversion_size)
+		i += 4 // Skip ProjectCompatVersion
+	} else {
+		i -= 2 // No CompatVersionRecord present - undo read of the ID
+	}
+
 	// PROJECTLCID Record
 	projectlcid_id := getUint16(dir_stream, &i)
+
 	check_value("PROJECTLCID_Id", 0x0002, uint32(projectlcid_id))
 	projectlcid_size := getUint32(dir_stream, &i)
 	check_value("PROJECTLCID_Size", 0x0004, projectlcid_size)
@@ -690,22 +701,26 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 
 	// PROJECTCONSTANTS Record
 	projectconstants_id := getUint16(dir_stream, &i)
-	check_value("PROJECTCONSTANTS_Id", 0x000C, uint32(projectconstants_id))
-	projectconstants_sizeof_constants := int(getUint32(dir_stream, &i))
-	if projectconstants_sizeof_constants > 1015 {
-		return nil, errors.New(fmt.Sprintf(
-			"PROJECTCONSTANTS_SizeOfConstants value not in range: %v", projectconstants_sizeof_constants))
+	if projectconstants_id == 0x000C {
+		check_value("PROJECTCONSTANTS_Id", 0x000C, uint32(projectconstants_id))
+		projectconstants_sizeof_constants := int(getUint32(dir_stream, &i))
+		if projectconstants_sizeof_constants > 1015 {
+			return nil, errors.New(fmt.Sprintf(
+				"PROJECTCONSTANTS_SizeOfConstants value not in range: %v", projectconstants_sizeof_constants))
+		}
+		// projectconstants_constants := dir_stream[i : i+projectconstants_sizeof_constants]
+		i += projectconstants_sizeof_constants
+		projectconstants_reserved := getUint16(dir_stream, &i)
+		check_value("PROJECTCONSTANTS_Reserved", 0x003C, uint32(projectconstants_reserved))
+		projectconstants_sizeof_constants_unicode := int(getUint32(dir_stream, &i))
+		if projectconstants_sizeof_constants_unicode%2 != 0 {
+			return nil, errors.New("PROJECTCONSTANTS_SizeOfConstantsUnicode is not even")
+		}
+		// projectconstants_constants_unicode := dir_stream[i : i+projectconstants_sizeof_constants_unicode]
+		i += projectconstants_sizeof_constants_unicode
+	} else {
+		i -= 2
 	}
-	// projectconstants_constants := dir_stream[i : i+projectconstants_sizeof_constants]
-	i += projectconstants_sizeof_constants
-	projectconstants_reserved := getUint16(dir_stream, &i)
-	check_value("PROJECTCONSTANTS_Reserved", 0x003C, uint32(projectconstants_reserved))
-	projectconstants_sizeof_constants_unicode := int(getUint32(dir_stream, &i))
-	if projectconstants_sizeof_constants_unicode%2 != 0 {
-		return nil, errors.New("PROJECTCONSTANTS_SizeOfConstantsUnicode is not even")
-	}
-	// projectconstants_constants_unicode := dir_stream[i : i+projectconstants_sizeof_constants_unicode]
-	i += projectconstants_sizeof_constants_unicode
 
 	// array of REFERENCE records
 	var check uint16
