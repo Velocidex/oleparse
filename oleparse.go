@@ -577,7 +577,24 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 		return nil, fmt.Errorf(
 			"invalid PROJECTSYSKIND_SysKind %04x", projectsyskind_syskind)
 	}
-
+	
+	// PROJECTLCID Record or PROJECTCOMPATVERSION Record
+	project_id := getUint16(dir_stream, &i)
+	if project_id == 0x004A {
+		// PROJECTCOMPATVERSION Record
+		// Specifies the VBA project's compat version.
+		projectcompatversion_id := project_id
+		check_value("PROJETCOMPATVERSION_Id", 0x004A, uint32(projectcompatversion_id))
+		projectcompatversion_size := getUint32(dir_stream, &i)
+		check_value("PROJECTCOMPATVERSION_Size", 0x0004, uint32(projectcompatversion_size))
+		projectcompatversion_compatversion := getUint32(dir_stream, &i)
+		// compat version: A 32-bit number that identifies the Office Model version used by a VBA project.
+		// PROJECTLCID Record
+		fmt.Println(projectcompatversion_compatversion)
+		project_id = getUint16(dir_stream, &i)
+	}
+	projectlcid_id := project_id
+	
 	// PROJECTLCID Record
 	projectlcid_id := getUint16(dir_stream, &i)
 	check_value("PROJECTLCID_Id", 0x0002, uint32(projectlcid_id))
