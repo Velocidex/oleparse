@@ -179,7 +179,7 @@ func (self *OLEFile) _ReadChain(
 		next := ReadFat(sector)
 		_, pres := check[next]
 		if pres {
-			fmt.Printf("infinite loop detected at %v to %v starting at %v",
+			DebugPrintf("infinite loop detected at %v to %v starting at %v",
 				sector, next, start)
 			return result
 		}
@@ -375,7 +375,7 @@ func DecompressStream(compressed_container []byte) []byte {
 
 	sig_byte := compressed_container[compressed_current]
 	if sig_byte != 0x01 {
-		fmt.Printf("invalid signature byte %02X", sig_byte)
+		DebugPrintf("invalid signature byte %02X", sig_byte)
 		return nil
 	}
 
@@ -383,7 +383,7 @@ func DecompressStream(compressed_container []byte) []byte {
 
 	for compressed_current < len(compressed_container) {
 		// 2.4.1.1.5
-		//compressed_chunk_start = compressed_current
+		// compressed_chunk_start = compressed_current
 		compressed_chunk_header := binary.LittleEndian.Uint16(
 			compressed_container[compressed_current:])
 
@@ -755,7 +755,7 @@ loop:
 				continue loop
 			} else {
 				check = reference_reserved
-				debug(fmt.Sprintf("reference type = %04x", check))
+				DebugPrintf("reference type = %04x", check)
 			}
 		case 0x0033:
 			// REFERENCEORIGINAL (followed by REFERENCECONTROL)
@@ -783,7 +783,7 @@ loop:
 
 			if check2 == 0x0016 {
 				referencecontrol_namerecordextended_sizeof_name := int(getUint32(dir_stream, &i))
-				//referencecontrol_namerecordextended_name := dir_stream[i : i+ referencecontrol_namerecordextended_sizeof_name]
+				// referencecontrol_namerecordextended_name := dir_stream[i : i+ referencecontrol_namerecordextended_sizeof_name]
 				i += referencecontrol_namerecordextended_sizeof_name
 				referencecontrol_namerecordextended_reserved := int(getUint16(dir_stream, &i))
 				if referencecontrol_namerecordextended_reserved == 0x003E {
@@ -799,7 +799,7 @@ loop:
 				referencecontrol_reserved3 = check2
 			}
 			check_value("REFERENCECONTROL_Reserved3", 0x0030, uint32(referencecontrol_reserved3))
-			//referencecontrol_sizeextended := int(getUint32(dir_stream, &i))
+			// referencecontrol_sizeextended := int(getUint32(dir_stream, &i))
 			i += 4
 			referencecontrol_sizeof_libidextended := int(getUint32(dir_stream, &i))
 			// referencecontrol_libidextended := dir_stream[i : i+referencecontrol_sizeof_libidextended]
@@ -950,7 +950,7 @@ loop:
 			section_id = getUint16(dir_stream, &i)
 		}
 		if section_id == 0x0021 || section_id == 0x0022 {
-			//moduletype_reserved := getUint32(dir_stream, &i)
+			// moduletype_reserved := getUint32(dir_stream, &i)
 			i += 4
 			section_id = getUint16(dir_stream, &i)
 		}
@@ -974,7 +974,7 @@ loop:
 			section_id = 0
 		}
 		if section_id != 0 {
-			debug(fmt.Sprintf("unknown or invalid module section id %04x", section_id))
+			DebugPrintf("unknown or invalid module section id %04x", section_id)
 		}
 
 		DebugPrintf("Project CodePage = %d", projectcodepage_codepage)
@@ -1080,10 +1080,6 @@ func ParseBuffer(data []byte) ([]*VBAModule, error) {
 	}
 
 	return macros, nil
-}
-
-func debug(message string) {
-	// fmt.Println(message)
 }
 
 func decodeUnicode(data []byte, codepage uint16) string {
