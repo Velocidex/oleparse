@@ -120,7 +120,7 @@ func (self *OLEFile) ReadSector(sector uint32) []byte {
 	start := 512 + self.SectorSize*int(sector)
 
 	to_read := self.SectorSize
-	if start > len(self.data) {
+	if start > len(self.data) || start < 0 {
 		return nil
 	}
 
@@ -134,7 +134,7 @@ func (self *OLEFile) ReadMiniSector(sector uint32) []byte {
 	start := self.MiniSectorSize * int(sector)
 
 	to_read := self.MiniSectorSize
-	if start > len(self.ministream) {
+	if start > len(self.ministream) || start < 0 {
 		return nil
 	}
 
@@ -373,6 +373,11 @@ func DecompressStream(compressed_container []byte) []byte {
 	//	compressed_chunk_start := 0
 	decompressed_chunk_start := 0
 
+	if len(compressed_container) == 0 {
+		DebugPrintf("compressed stream is empty")
+		return nil
+	}
+
 	sig_byte := compressed_container[compressed_current]
 	if sig_byte != 0x01 {
 		DebugPrintf("invalid signature byte %02X", sig_byte)
@@ -382,6 +387,11 @@ func DecompressStream(compressed_container []byte) []byte {
 	compressed_current += 1
 
 	for compressed_current < len(compressed_container) {
+		if compressed_current+2 > len(compressed_container) {
+			// At least 2 bytes for the header are needed
+			DebugPrintf("Compressed stream ended prematurely")
+			break
+		}
 		// 2.4.1.1.5
 		// compressed_chunk_start = compressed_current
 		compressed_chunk_header := binary.LittleEndian.Uint16(
@@ -409,6 +419,8 @@ func DecompressStream(compressed_container []byte) []byte {
 		compressed_end := len(compressed_container)
 		if compressed_end > compressed_current+int(chunk_size) {
 			compressed_end = compressed_current + int(chunk_size)
+		} else {
+			DebugPrintf("Chunk exceeds compressed stream length")
 		}
 
 		compressed_current += 2
@@ -425,15 +437,20 @@ func DecompressStream(compressed_container []byte) []byte {
 			flag_byte := compressed_container[compressed_current]
 			compressed_current += 1
 			for bit_index := uint16(0); bit_index < 8; bit_index++ {
-				if compressed_current >= compressed_end {
-					break
-				}
-
 				if (1<<bit_index)&flag_byte == 0 { // LiteralToken
+					if compressed_current >= compressed_end {
+						DebugPrintf("Compressed stream ended prematurely")
+						break
+					}
 					decompressed_container = append(decompressed_container,
 						compressed_container[compressed_current])
 					compressed_current += 1
 					continue
+				}
+
+				if compressed_current > compressed_end-2 {
+					DebugPrintf("Compressed stream ended prematurely")
+					break
 				}
 
 				// copy tokens
@@ -589,7 +606,7 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 		compatversion_size := getUint32(dir_stream, &i)
 		check_value("PROJECTCOMPATVERSION_Size", 0x4, compatversion_size)
 		i += 4 // Skip ProjectCompatVersion
-	} else {
+	} else if i >= 2 {
 		i -= 2 // No CompatVersionRecord present - undo read of the ID
 	}
 
@@ -657,7 +674,7 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 	projecthelpfilepath_id := getUint16(dir_stream, &i)
 	check_value("PROJECTHELPFILEPATH_Id", 0x0006, uint32(projecthelpfilepath_id))
 	projecthelpfilepath_sizeof_helpfile1 := int(getUint32(dir_stream, &i))
-	if projecthelpfilepath_sizeof_helpfile1 > 260 {
+	if projecthelpfilepath_sizeof_helpfile1 > 260 || projecthelpfilepath_sizeof_helpfile1+i > len(dir_stream) {
 		return nil, errors.New(fmt.Sprintf(
 			"PROJECTHELPFILEPATH_SizeOfHelpFile1 value not in range: %v", projecthelpfilepath_sizeof_helpfile1))
 	}
@@ -668,6 +685,9 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 	projecthelpfilepath_sizeof_helpfile2 := int(getUint32(dir_stream, &i))
 	if projecthelpfilepath_sizeof_helpfile2 != projecthelpfilepath_sizeof_helpfile1 {
 		return nil, errors.New("PROJECTHELPFILEPATH_SizeOfHelpFile1 does not equal PROJECTHELPFILEPATH_SizeOfHelpFile2")
+	} else if projecthelpfilepath_sizeof_helpfile2+i > len(dir_stream) {
+		return nil, errors.New(fmt.Sprintf(
+			"PROJECTHELPFILEPATH_SizeOfHelpFile2 value not in range: %v", projecthelpfilepath_sizeof_helpfile2))
 	}
 	projecthelpfilepath_helpfile2 := dir_stream[i : i+projecthelpfilepath_sizeof_helpfile2]
 	i += projecthelpfilepath_sizeof_helpfile2
@@ -723,7 +743,7 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 		}
 		// projectconstants_constants_unicode := dir_stream[i : i+projectconstants_sizeof_constants_unicode]
 		i += projectconstants_sizeof_constants_unicode
-	} else {
+	} else if i >= 2 {
 		i -= 2
 	}
 
@@ -869,6 +889,10 @@ loop:
 	//    uni_out = lambda unicode_text: unicode_text.encode("utf-8", "replace")
 	DebugPrintf("parsing %v modules", projectmodules_count)
 	for projectmodule_index := 0; projectmodule_index < int(projectmodules_count); projectmodule_index++ {
+		if i >= len(dir_stream)-2 { // At the very least, there must by a 2-byte ID
+			return nil, errors.New("dir_stream index out of range")
+		}
+
 		modulestreamname_streamname := ""
 		modulestreamname_streamname_unicode := []byte{}
 		moduleoffset_textoffset := uint32(0)
@@ -877,6 +901,9 @@ loop:
 
 		check_value("MODULENAME_Id", 0x0019, uint32(modulename_id))
 		modulename_sizeof_modulename := int(getUint32(dir_stream, &i))
+		if len(dir_stream) < i+modulename_sizeof_modulename {
+			return nil, errors.New("MODULENAME_SizeOfModuleName value not in range")
+		}
 		modulename_modulename := string(dir_stream[i : i+modulename_sizeof_modulename])
 		i += modulename_sizeof_modulename
 
@@ -886,8 +913,10 @@ loop:
 		// account for optional sections
 		section_id := getUint16(dir_stream, &i)
 		if section_id == 0x0047 {
-			modulename_unicode_sizeof_modulename_unicode := int(binary.LittleEndian.Uint32(dir_stream[i:]))
-			i += 4
+			modulename_unicode_sizeof_modulename_unicode := int(getUint32(dir_stream, &i))
+			if len(dir_stream) < i+modulename_unicode_sizeof_modulename_unicode {
+				return nil, errors.New("MODULENAMEUNICODE_SizeOfModuleNameUnicode value not in range")
+			}
 			modulename_unicode_modulename_unicode = dir_stream[i : i+
 				modulename_unicode_sizeof_modulename_unicode]
 			i += modulename_unicode_sizeof_modulename_unicode
@@ -897,12 +926,18 @@ loop:
 
 		if section_id == 0x001A {
 			modulestreamname_sizeof_streamname := int(getUint32(dir_stream, &i))
+			if len(dir_stream) < i+modulestreamname_sizeof_streamname {
+				return nil, errors.New("MODULESTREAMNAME_SizeOfStreamName value not in range")
+			}
 			modulestreamname_streamname = string(dir_stream[i : i+modulestreamname_sizeof_streamname])
 			i = i + modulestreamname_sizeof_streamname
 
 			modulestreamname_reserved := getUint16(dir_stream, &i)
 			check_value("MODULESTREAMNAME_Reserved", 0x0032, uint32(modulestreamname_reserved))
 			modulestreamname_sizeof_streamname_unicode := int(getUint32(dir_stream, &i))
+			if len(dir_stream) < i+modulestreamname_sizeof_streamname_unicode {
+				return nil, errors.New("MODULESTREAMNAME_SizeOfStreamNameUnicode value not in range")
+			}
 			modulestreamname_streamname_unicode = dir_stream[i : i+
 				modulestreamname_sizeof_streamname_unicode]
 			i += modulestreamname_sizeof_streamname_unicode
@@ -1004,6 +1039,11 @@ loop:
 
 		DebugPrintf("length of code_data = %v", len(code_data))
 		DebugPrintf("offset of code_data = %v", moduleoffset_textoffset)
+		if int(moduleoffset_textoffset) > len(code_data) {
+			DebugPrintf("invalid offset for module %v: %v",
+				modulestreamname_streamname, moduleoffset_textoffset)
+			continue
+		}
 		code_data = code_data[moduleoffset_textoffset:]
 		if len(code_data) > 0 {
 			result = append(result, &VBAModule{
