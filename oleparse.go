@@ -392,6 +392,11 @@ func DecompressStream(compressed_container []byte) []byte {
 		// 1 == compressed, 0 == uncompressed
 		chunk_is_compressed := (compressed_chunk_header & 0x8000) >> 15
 
+		chunk_signature := (compressed_chunk_header & 0x7000) >> 12
+		if chunk_signature != 0x03 {
+			DebugPrintf("invalid chunk signature %v", chunk_signature)
+		}
+
 		if chunk_is_compressed != 0 && chunk_size > 4095 {
 			DebugPrintf("CompressedChunkSize > 4095 but CompressedChunkFlag == 1")
 		}
@@ -410,8 +415,8 @@ func DecompressStream(compressed_container []byte) []byte {
 
 		if chunk_is_compressed == 0 { // uncompressed
 			decompressed_container = append(decompressed_container,
-				compressed_container[compressed_current:compressed_current+4096]...)
-			compressed_current += 4096
+				compressed_container[compressed_current:compressed_end]...)
+			compressed_current = compressed_end
 			continue
 		}
 
