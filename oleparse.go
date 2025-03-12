@@ -179,7 +179,7 @@ func (self *OLEFile) _ReadChain(
 		next := ReadFat(sector)
 		_, pres := check[next]
 		if pres {
-			fmt.Printf("infinite loop detected at %v to %v starting at %v",
+			DebugPrintf("infinite loop detected at %v to %v starting at %v",
 				sector, next, start)
 			return result
 		}
@@ -375,7 +375,7 @@ func DecompressStream(compressed_container []byte) []byte {
 
 	sig_byte := compressed_container[compressed_current]
 	if sig_byte != 0x01 {
-		fmt.Printf("invalid signature byte %02X", sig_byte)
+		DebugPrintf("invalid signature byte %02X", sig_byte)
 		return nil
 	}
 
@@ -383,7 +383,7 @@ func DecompressStream(compressed_container []byte) []byte {
 
 	for compressed_current < len(compressed_container) {
 		// 2.4.1.1.5
-		//compressed_chunk_start = compressed_current
+		// compressed_chunk_start = compressed_current
 		compressed_chunk_header := binary.LittleEndian.Uint16(
 			compressed_container[compressed_current:])
 
@@ -391,6 +391,11 @@ func DecompressStream(compressed_container []byte) []byte {
 		chunk_size := (compressed_chunk_header & 0x0FFF) + 3
 		// 1 == compressed, 0 == uncompressed
 		chunk_is_compressed := (compressed_chunk_header & 0x8000) >> 15
+
+		chunk_signature := (compressed_chunk_header & 0x7000) >> 12
+		if chunk_signature != 0x03 {
+			DebugPrintf("invalid chunk signature %v", chunk_signature)
+		}
 
 		if chunk_is_compressed != 0 && chunk_size > 4095 {
 			DebugPrintf("CompressedChunkSize > 4095 but CompressedChunkFlag == 1")
@@ -410,8 +415,8 @@ func DecompressStream(compressed_container []byte) []byte {
 
 		if chunk_is_compressed == 0 { // uncompressed
 			decompressed_container = append(decompressed_container,
-				compressed_container[compressed_current:compressed_current+4096]...)
-			compressed_current += 4096
+				compressed_container[compressed_current:compressed_end]...)
+			compressed_current = compressed_end
 			continue
 		}
 
@@ -578,8 +583,19 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 			"invalid PROJECTSYSKIND_SysKind %04x", projectsyskind_syskind)
 	}
 
+	// Optional: CompatVersionRecord
+	compatversion_id := getUint16(dir_stream, &i)
+	if compatversion_id == 0x4A {
+		compatversion_size := getUint32(dir_stream, &i)
+		check_value("PROJECTCOMPATVERSION_Size", 0x4, compatversion_size)
+		i += 4 // Skip ProjectCompatVersion
+	} else {
+		i -= 2 // No CompatVersionRecord present - undo read of the ID
+	}
+
 	// PROJECTLCID Record
 	projectlcid_id := getUint16(dir_stream, &i)
+
 	check_value("PROJECTLCID_Id", 0x0002, uint32(projectlcid_id))
 	projectlcid_size := getUint32(dir_stream, &i)
 	check_value("PROJECTLCID_Size", 0x0004, projectlcid_size)
@@ -690,22 +706,26 @@ func ExtractMacros(ofdoc *OLEFile) ([]*VBAModule, error) {
 
 	// PROJECTCONSTANTS Record
 	projectconstants_id := getUint16(dir_stream, &i)
-	check_value("PROJECTCONSTANTS_Id", 0x000C, uint32(projectconstants_id))
-	projectconstants_sizeof_constants := int(getUint32(dir_stream, &i))
-	if projectconstants_sizeof_constants > 1015 {
-		return nil, errors.New(fmt.Sprintf(
-			"PROJECTCONSTANTS_SizeOfConstants value not in range: %v", projectconstants_sizeof_constants))
+	if projectconstants_id == 0x000C {
+		check_value("PROJECTCONSTANTS_Id", 0x000C, uint32(projectconstants_id))
+		projectconstants_sizeof_constants := int(getUint32(dir_stream, &i))
+		if projectconstants_sizeof_constants > 1015 {
+			return nil, errors.New(fmt.Sprintf(
+				"PROJECTCONSTANTS_SizeOfConstants value not in range: %v", projectconstants_sizeof_constants))
+		}
+		// projectconstants_constants := dir_stream[i : i+projectconstants_sizeof_constants]
+		i += projectconstants_sizeof_constants
+		projectconstants_reserved := getUint16(dir_stream, &i)
+		check_value("PROJECTCONSTANTS_Reserved", 0x003C, uint32(projectconstants_reserved))
+		projectconstants_sizeof_constants_unicode := int(getUint32(dir_stream, &i))
+		if projectconstants_sizeof_constants_unicode%2 != 0 {
+			return nil, errors.New("PROJECTCONSTANTS_SizeOfConstantsUnicode is not even")
+		}
+		// projectconstants_constants_unicode := dir_stream[i : i+projectconstants_sizeof_constants_unicode]
+		i += projectconstants_sizeof_constants_unicode
+	} else {
+		i -= 2
 	}
-	// projectconstants_constants := dir_stream[i : i+projectconstants_sizeof_constants]
-	i += projectconstants_sizeof_constants
-	projectconstants_reserved := getUint16(dir_stream, &i)
-	check_value("PROJECTCONSTANTS_Reserved", 0x003C, uint32(projectconstants_reserved))
-	projectconstants_sizeof_constants_unicode := int(getUint32(dir_stream, &i))
-	if projectconstants_sizeof_constants_unicode%2 != 0 {
-		return nil, errors.New("PROJECTCONSTANTS_SizeOfConstantsUnicode is not even")
-	}
-	// projectconstants_constants_unicode := dir_stream[i : i+projectconstants_sizeof_constants_unicode]
-	i += projectconstants_sizeof_constants_unicode
 
 	// array of REFERENCE records
 	var check uint16
@@ -740,7 +760,7 @@ loop:
 				continue loop
 			} else {
 				check = reference_reserved
-				debug(fmt.Sprintf("reference type = %04x", check))
+				DebugPrintf("reference type = %04x", check)
 			}
 		case 0x0033:
 			// REFERENCEORIGINAL (followed by REFERENCECONTROL)
@@ -768,7 +788,7 @@ loop:
 
 			if check2 == 0x0016 {
 				referencecontrol_namerecordextended_sizeof_name := int(getUint32(dir_stream, &i))
-				//referencecontrol_namerecordextended_name := dir_stream[i : i+ referencecontrol_namerecordextended_sizeof_name]
+				// referencecontrol_namerecordextended_name := dir_stream[i : i+ referencecontrol_namerecordextended_sizeof_name]
 				i += referencecontrol_namerecordextended_sizeof_name
 				referencecontrol_namerecordextended_reserved := int(getUint16(dir_stream, &i))
 				if referencecontrol_namerecordextended_reserved == 0x003E {
@@ -784,7 +804,7 @@ loop:
 				referencecontrol_reserved3 = check2
 			}
 			check_value("REFERENCECONTROL_Reserved3", 0x0030, uint32(referencecontrol_reserved3))
-			//referencecontrol_sizeextended := int(getUint32(dir_stream, &i))
+			// referencecontrol_sizeextended := int(getUint32(dir_stream, &i))
 			i += 4
 			referencecontrol_sizeof_libidextended := int(getUint32(dir_stream, &i))
 			// referencecontrol_libidextended := dir_stream[i : i+referencecontrol_sizeof_libidextended]
@@ -935,7 +955,7 @@ loop:
 			section_id = getUint16(dir_stream, &i)
 		}
 		if section_id == 0x0021 || section_id == 0x0022 {
-			//moduletype_reserved := getUint32(dir_stream, &i)
+			// moduletype_reserved := getUint32(dir_stream, &i)
 			i += 4
 			section_id = getUint16(dir_stream, &i)
 		}
@@ -959,7 +979,7 @@ loop:
 			section_id = 0
 		}
 		if section_id != 0 {
-			debug(fmt.Sprintf("unknown or invalid module section id %04x", section_id))
+			DebugPrintf("unknown or invalid module section id %04x", section_id)
 		}
 
 		DebugPrintf("Project CodePage = %d", projectcodepage_codepage)
@@ -1065,10 +1085,6 @@ func ParseBuffer(data []byte) ([]*VBAModule, error) {
 	}
 
 	return macros, nil
-}
-
-func debug(message string) {
-	// fmt.Println(message)
 }
 
 func decodeUnicode(data []byte, codepage uint16) string {
