@@ -89,6 +89,9 @@ func NewDirectory(data []byte, index uint32) (*Directory, error) {
 	if err != nil {
 		return nil, err
 	}
+	if self.Header.Mse == 0 { // Unallocated
+		return nil, nil
+	}
 
 	self.Name = strings.TrimRight(
 		string(utf16.Decode(self.Header.AB[:])), "\x00")
@@ -338,6 +341,9 @@ func NewOLEFile(data []byte) (*OLEFile, error) {
 			uint32(directory_index))
 		if err != nil {
 			return nil, err
+		}
+		if dir_obj == nil { // Unallocated index
+			continue
 		}
 		self.Directory = append(self.Directory, dir_obj)
 	}
