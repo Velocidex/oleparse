@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +19,20 @@ func TestMacros(t *testing.T) {
 
 	serialized, _ := json.MarshalIndent(macros, " ", " ")
 	goldie.Assert(t, "vba_macros", serialized)
+}
+
+func TestOlev4(t *testing.T) {
+	oleData, err := os.ReadFile("test_data/vs.msi")
+	if err != nil {
+		t.Fatalf("Failed to open test file: %v", err)
+	}
+	oleFile, err := NewOLEFile(oleData)
+	if err != nil {
+		t.Fatalf("Failed to parse OLE file: %v", err)
+	}
+	if len(oleFile.Directory) != 28 {
+		t.Fatalf("Expected 28 directory entries, got %d", len(oleFile.Directory))
+	}
 }
 
 func FuzzExtractMacros(f *testing.F) {
