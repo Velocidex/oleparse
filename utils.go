@@ -6,13 +6,6 @@ func Debug(arg interface{}) {
 	spew.Dump(arg)
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -20,9 +13,14 @@ func min(a, b int) int {
 	return b
 }
 
-func uint32_min(a, b uint32) uint32 {
-	if a < b {
-		return a
+func hasBytes(data []byte, offset, size int) bool {
+	return offset >= 0 && size >= 0 && offset <= len(data) && size <= len(data)-offset
+}
+
+func skipBytes(data []byte, offset *int, size int) bool {
+	if offset == nil || !hasBytes(data, *offset, size) {
+		return false
 	}
-	return b
+	*offset += size
+	return true
 }
